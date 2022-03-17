@@ -42,10 +42,13 @@ parser.add_argument('--frame_margin', type=float, default=1, help="some silent f
 parser.add_argument('--sample_rate', type=float, default=44100, help="sample rate of the input and output videos")
 parser.add_argument('--frame_rate', type=float, default=30, help="frame rate of the input and output videos. optional... I try to find it out myself, but it doesn't always work.")
 parser.add_argument('--frame_quality', type=int, default=3, help="quality of frames to be extracted from input video. 1 is highest, 31 is lowest, 3 is the default.")
+parser.add_argument('--simulate', action='store_true', help="does not render video but provides estimated output information")
 
 args = parser.parse_args()
 
 
+
+SIMULATE = args.simulate
 
 frameRate = args.frame_rate
 SAMPLE_RATE = args.sample_rate
@@ -83,15 +86,15 @@ else:
 	BIT_RATE = 160000
 
 
-tempName = 'temp_audio_{}.wav'.format(''.join(random.choices(string.ascii_letters + string.digits, k=16)))
-command = 'ffmpeg -i {input_file} -ab {bitrate} -ac 2 -ar {samplerate} -vn {temp}'.format(input_file=INPUT_FILE, bitrate=BIT_RATE, samplerate=SAMPLE_RATE, temp=tempName)
+tempName = 'temp_{}'.format(''.join(random.choices(string.ascii_letters + string.digits, k=16)))
+command = 'ffmpeg -i {input_file} -ab {bitrate} -ac 2 -ar {samplerate} -vn {temp}.wav'.format(input_file=INPUT_FILE, bitrate=BIT_RATE, samplerate=SAMPLE_RATE, temp=tempName)
 subprocess.call(command, shell=True)
 
 
-sampleRate, audioData = wavfile.read(tempName)
+sampleRate, audioData = wavfile.read(tempName+'.wav')
 audioSampleCount = audioData.shape[0]
 maxAudioVolume = getMaxVolume(audioData)
-os.remove(tempName)
+os.remove(tempName+'.wav')
 
 
 
@@ -129,11 +132,33 @@ for i in range(len(chunks)-1):
 			chunks[i][1] = chunks[i+1][1]
 			chunks.pop(i+1)
 
-filt = ''
-cat = ''
-for i in range(len(chunks)):
-	filt += '[0:v] trim=start_frame={start}:end_frame={end},setpts=PTS-STARTPTS,setpts={arcspeed:.4f}*PTS [v{label}];[0:a] atrim=start_sample={astart}:end_sample={aend},asetpts=PTS-STARTPTS,atempo={speed:.4f} [a{label}];'.format(label=i, start = chunks[i][0], end = chunks[i][1], astart=chunks[i][0]*SAMPLE_RATE/frameRate , aend=chunks[i][1]*SAMPLE_RATE/frameRate , speed = NEW_SPEED[int(chunks[i][2])], arcspeed = 1/NEW_SPEED[int(chunks[i][2])])
-	cat += '[v{0}] [a{0}] '.format(i)
-cat += 'concat=n={}:v=1:a=1 [v] [a]'.format(len(chunks))
-command = 'ffmpeg -i {in_file} -filter_complex "{f} {c}" -map [v] -map [a] {out_file}'.format(in_file=INPUT_FILE, out_file=OUTPUT_FILE, f=filt, c=cat)
-subprocess.call(command, shell=True)
+if SIMULATE:
+	time = [0,0]
+	for chunk in chunks:
+		time[int(chunk[2])] = time[int(chunk[2])] + chunk[1] - chunk[0]
+	time[0] = time[0]/frameRate
+	time[1] = time[1]/frameRate
+	print('Time with sound= {h:d}:{m:02d}:{s:02d}'.format(h=int(time[1]/3600), m=int(time[1]/60)%60, s=int(time[1])%60))
+	print('Time in silence= {h:d}:{m:02d}:{s:02d}'.format(h=int(time[0]/3600), m=int(time[0]/60)%60, s=int(time[0])%60))
+	time[0] = time[0]/NEW_SPEED[0]
+	time[1] = time[1]/NEW_SPEED[1]
+	print('Adjusted time with sound= {h:d}:{m:02d}:{s:02d}'.format(h=int(time[1]/3600), m=int(time[1]/60)%60, s=int(time[1])%60))
+	print('Adjusted time in silence= {h:d}:{m:02d}:{s:02d}'.format(h=int(time[0]/3600), m=int(time[0]/60)%60, s=int(time[0])%60))
+	t = time[0] + time[1]
+	print('Total output time= {h:d}:{m:02d}:{s:02d}'.format(h=int(t/3600), m=int(t/60)%60, s=int(t)%60))
+else:
+	filt = ''
+	cat = ''
+	f = open(tempName+'.txt', 'w')
+	for i in range(len(chunks)):
+		#filt += '[0:v] trim=start_frame={start}:end_frame={end},setpts=PTS-STARTPTS,setpts={arcspeed:.3f}*PTS [v{label}];[0:a] atrim=start_sample={astart}:end_sample={aend},asetpts=PTS-STARTPTS,atempo={speed:.3f} [a{label}];'.format(label=i, start = chunks[i][0], end = chunks[i][1], astart=int(chunks[i][0]*SAMPLE_RATE/frameRate) , aend=int(chunks[i][1]*SAMPLE_RATE/frameRate) , speed = NEW_SPEED[int(chunks[i][2])], arcspeed = 1/NEW_SPEED[int(chunks[i][2])])
+		f.write('[0:v] trim=start_frame={start}:end_frame={end},setpts=PTS-STARTPTS,setpts={arcspeed:.3f}*PTS [v{label}];[0:a] atrim=start_sample={astart}:end_sample={aend},asetpts=PTS-STARTPTS,atempo={speed:.3f} [a{label}];'.format(label=i, start = chunks[i][0], end = chunks[i][1], astart=int(chunks[i][0]*SAMPLE_RATE/frameRate) , aend=int(chunks[i][1]*SAMPLE_RATE/frameRate) , speed = NEW_SPEED[int(chunks[i][2])], arcspeed = 1/NEW_SPEED[int(chunks[i][2])]))
+		cat += '[v{0}] [a{0}] '.format(i)
+	cat += 'concat=n={}:v=1:a=1 [v] [a]'.format(len(chunks))
+	f.write(' {}'.format(cat))
+	f.close()
+
+	command = 'ffmpeg -i {in_file} -filter_complex_script "{script}" -map [v] -map [a] {out_file}'.format(in_file=INPUT_FILE, out_file=OUTPUT_FILE, script=tempName+'.txt')
+	subprocess.call(command, shell=True)
+
+	os.remove(tempName+'.txt')
