@@ -43,12 +43,14 @@ parser.add_argument('--sample_rate', type=float, default=44100, help="sample rat
 parser.add_argument('--frame_rate', type=float, default=30, help="frame rate of the input and output videos. optional... I try to find it out myself, but it doesn't always work.")
 parser.add_argument('--frame_quality', type=int, default=3, help="quality of frames to be extracted from input video. 1 is highest, 31 is lowest, 3 is the default.")
 parser.add_argument('--simulate', action='store_true', help="does not render video but provides estimated output information")
+parser.add_argument('--trim', action='store_true', help="removes the first and last section if it is silent")
 
 args = parser.parse_args()
 
 
 
 SIMULATE = args.simulate
+TRIM = args.trim
 
 frameRate = args.frame_rate
 SAMPLE_RATE = args.sample_rate
@@ -150,11 +152,12 @@ else:
 	filt = ''
 	cat = ''
 	f = open(tempName+'.txt', 'w')
-	for i in range(len(chunks)):
+	rag = range(1 if (TRIM and chunks[0][2]==0) else 0,len(chunks) - (1 if (TRIM and chunks[len(chunks)-1][2]==0) else 0))
+	for i in rag:
 		#filt += '[0:v] trim=start_frame={start}:end_frame={end},setpts=PTS-STARTPTS,setpts={arcspeed:.3f}*PTS [v{label}];[0:a] atrim=start_sample={astart}:end_sample={aend},asetpts=PTS-STARTPTS,atempo={speed:.3f} [a{label}];'.format(label=i, start = chunks[i][0], end = chunks[i][1], astart=int(chunks[i][0]*SAMPLE_RATE/frameRate) , aend=int(chunks[i][1]*SAMPLE_RATE/frameRate) , speed = NEW_SPEED[int(chunks[i][2])], arcspeed = 1/NEW_SPEED[int(chunks[i][2])])
 		f.write('[0:v] trim=start_frame={start}:end_frame={end},setpts=PTS-STARTPTS,setpts={arcspeed:.3f}*PTS [v{label}];[0:a] atrim=start_sample={astart}:end_sample={aend},asetpts=PTS-STARTPTS,atempo={speed:.3f} [a{label}];'.format(label=i, start = chunks[i][0], end = chunks[i][1], astart=int(chunks[i][0]*SAMPLE_RATE/frameRate) , aend=int(chunks[i][1]*SAMPLE_RATE/frameRate) , speed = NEW_SPEED[int(chunks[i][2])], arcspeed = 1/NEW_SPEED[int(chunks[i][2])]))
 		cat += '[v{0}] [a{0}] '.format(i)
-	cat += 'concat=n={}:v=1:a=1 [v] [a]'.format(len(chunks))
+	cat += 'concat=n={}:v=1:a=1 [v] [a]'.format(len(rag))
 	f.write(' {}'.format(cat))
 	f.close()
 
