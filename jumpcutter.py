@@ -29,7 +29,6 @@ def inputToOutputFilename(filename):
     dotIndex = filename.rfind(".")
     return filename[:dotIndex]+"_ALTERED"+filename[dotIndex:]
 
-
 parser = argparse.ArgumentParser(description='Modifies a video file to play at different speeds when there is sound vs. silence.')
 parser.add_argument('--input_file', type=str,  help='the video file you want modified')
 parser.add_argument('--url', type=str, help='A youtube url to download and process')
@@ -73,11 +72,11 @@ else:
     OUTPUT_FILE = inputToOutputFilename(INPUT_FILE)
 
 
-output = subprocess.check_output('ffprobe -v quiet -show_streams -select_streams v:0 {}'.format(INPUT_FILE))
+output = subprocess.check_output('ffprobe -v quiet -show_streams -select_streams v:0 "{}"'.format(INPUT_FILE))
 m = re.search('r_frame_rate=([0-9]+)/([0-9]+)',str(output))
 if m is not None:
 	frameRate = float(m.group(1))/float(m.group(2))
-output = subprocess.check_output('ffprobe -v quiet -show_streams -select_streams a:0 {}'.format(INPUT_FILE))
+output = subprocess.check_output('ffprobe -v quiet -show_streams -select_streams a:0 "{}"'.format(INPUT_FILE))
 m = re.search('sample_rate=([0-9]+)',str(output))
 if m is not None:
 	SAMPLE_RATE = float(m.group(1))
@@ -89,14 +88,16 @@ else:
 
 
 tempName = 'temp_{}'.format(''.join(random.choices(string.ascii_letters + string.digits, k=16)))
-command = 'ffmpeg -i {input_file} -ab {bitrate} -ac 2 -ar {samplerate} -vn {temp}.wav'.format(input_file=INPUT_FILE, bitrate=BIT_RATE, samplerate=SAMPLE_RATE, temp=tempName)
+os.mkdir(tempName)
+tempTxt = tempName+'/data.txt'
+command = 'ffmpeg -i "{input_file}" -ab {bitrate} -ac 2 -ar {samplerate} -vn {temp}/{temp}.wav'.format(input_file=INPUT_FILE, bitrate=BIT_RATE, samplerate=SAMPLE_RATE, temp=tempName)
 subprocess.call(command, shell=True)
 
 
-sampleRate, audioData = wavfile.read(tempName+'.wav')
+sampleRate, audioData = wavfile.read(tempName+'/'+tempName+'.wav')
 audioSampleCount = audioData.shape[0]
 maxAudioVolume = getMaxVolume(audioData)
-os.remove(tempName+'.wav')
+os.remove(tempName+'/'+tempName+'.wav')
 
 
 
@@ -149,19 +150,45 @@ if SIMULATE:
 	t = time[0] + time[1]
 	print('Total output time= {h:d}:{m:02d}:{s:02d}'.format(h=int(t/3600), m=int(t/60)%60, s=int(t)%60))
 else:
-	filt = ''
-	cat = ''
-	f = open(tempName+'.txt', 'w')
-	rag = range(1 if (TRIM and chunks[0][2]==0) else 0,len(chunks) - (1 if (TRIM and chunks[len(chunks)-1][2]==0) else 0))
-	for i in rag:
-		#filt += '[0:v] trim=start_frame={start}:end_frame={end},setpts=PTS-STARTPTS,setpts={arcspeed:.3f}*PTS [v{label}];[0:a] atrim=start_sample={astart}:end_sample={aend},asetpts=PTS-STARTPTS,atempo={speed:.3f} [a{label}];'.format(label=i, start = chunks[i][0], end = chunks[i][1], astart=int(chunks[i][0]*SAMPLE_RATE/frameRate) , aend=int(chunks[i][1]*SAMPLE_RATE/frameRate) , speed = NEW_SPEED[int(chunks[i][2])], arcspeed = 1/NEW_SPEED[int(chunks[i][2])])
-		f.write('[0:v] trim=start_frame={start}:end_frame={end},setpts=PTS-STARTPTS,setpts={arcspeed:.3f}*PTS [v{label}];[0:a] atrim=start_sample={astart}:end_sample={aend},asetpts=PTS-STARTPTS,atempo={speed:.3f} [a{label}];'.format(label=i, start = chunks[i][0], end = chunks[i][1], astart=int(chunks[i][0]*SAMPLE_RATE/frameRate) , aend=int(chunks[i][1]*SAMPLE_RATE/frameRate) , speed = NEW_SPEED[int(chunks[i][2])], arcspeed = 1/NEW_SPEED[int(chunks[i][2])]))
-		cat += '[v{0}] [a{0}] '.format(i)
-	cat += 'concat=n={}:v=1:a=1 [v] [a]'.format(len(rag))
-	f.write(' {}'.format(cat))
+	fc = 0
+	i = 1 if (TRIM and chunks[0][2]==0) else 0
+	end = len(chunks) - (1 if (TRIM and chunks[len(chunks)-1][2]==0) else 0)
+	
+	splits = []
+	j = i
+	while j < end:
+		j1 = min(j + 150, end-1)
+		splits.append([j,j1])
+		command = 'ffmpeg -ss {start}s -to {to}s -accurate_seek -i "{in_file}" {out_file}'.format(start=chunks[j][0]/frameRate, to=chunks[j1][1]/frameRate, in_file=INPUT_FILE, out_file='{name}/part{id}.mp4'.format(id=fc,name=tempName))
+		subprocess.call(command, shell=True)
+		j = j1 + 1
+		fc += 1
+	
+	fc = 0
+	for split in splits:
+		cat = ''
+		start = chunks[split[0]][0]
+		f = open(tempTxt, 'w')
+		for i in range(split[0],split[1]+1):
+			f.write('[0:v] trim=start_frame={start}:end_frame={end},setpts=PTS-STARTPTS,setpts={arcspeed:.3f}*PTS [v{label}];[0:a] atrim=start_sample={astart}:end_sample={aend},asetpts=PTS-STARTPTS,atempo={speed:.3f} [a{label}];'.format(label=i, start = chunks[i][0]-start, end = chunks[i][1]-start, astart=int((chunks[i][0]-start)*SAMPLE_RATE/frameRate) , aend=int((chunks[i][1]-start)*SAMPLE_RATE/frameRate) , speed = NEW_SPEED[int(chunks[i][2])], arcspeed = 1/NEW_SPEED[int(chunks[i][2])]))
+			cat += '[v{0}] [a{0}] '.format(i)
+		cat += 'concat=n={}:v=1:a=1 [v] [a]'.format(split[1]-split[0]+1)
+		f.write(' {}'.format(cat))
+		f.close()
+
+		command = 'ffmpeg -i {in_file} -filter_complex_script "{script}" -map [v] -map [a] {out_file}'.format(in_file='{name}/part{id}.mp4'.format(id=fc,name=tempName), out_file='{name}/proc{id}.mp4'.format(id=fc,name=tempName), script=tempTxt)
+		subprocess.call(command, shell=True)
+		os.remove('{name}/part{id}.mp4'.format(id=fc,name=tempName))
+		fc += 1
+	
+	f = open(tempTxt, 'w')
+	for k in range(fc):
+		if k > 0:
+			f.write('\n')
+		f.write('file proc{id}.mp4'.format(id=k,name=tempName))
 	f.close()
-
-	command = 'ffmpeg -i {in_file} -filter_complex_script "{script}" -map [v] -map [a] {out_file}'.format(in_file=INPUT_FILE, out_file=OUTPUT_FILE, script=tempName+'.txt')
-	subprocess.call(command, shell=True)
-
-	os.remove(tempName+'.txt')
+	subprocess.call('ffmpeg -f concat -safe 0 -i {input} -vcodec copy -acodec copy "{output}"'.format(output=OUTPUT_FILE, input=tempTxt), shell=True)
+	for k in range(fc):
+		os.remove('{name}/proc{id}.mp4'.format(id=k,name=tempName))
+	os.remove(tempTxt)
+os.rmdir(tempName)
