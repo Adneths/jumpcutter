@@ -35,6 +35,7 @@ parser.add_argument('--url', type=str, help='A youtube url to download and proce
 parser.add_argument('-o', '--output_file', type=str, default="", help="the output file. (optional. if not included, it'll just modify the input file name)")
 parser.add_argument('-st', '--silent_threshold', type=float, default=0.03, help="the volume amount that frames' audio needs to surpass to be consider \"sounded\". It ranges from 0 (silence) to 1 (max volume)")
 parser.add_argument('-sd', '--silence_duration', type=int, default=0, help="number of frames of prolonged silence for the duration to be considered silent")
+parser.add_argument('-s', '--speed', type=str, default="1:5", help="[speed for sounded segments]:[speed for silent segments] (default: 1.0:5.0)")
 parser.add_argument('--sounded_speed', type=float, default=1.00, help="the speed that sounded (spoken) frames should be played at. Typically 1.")
 parser.add_argument('--silent_speed', type=float, default=5.00, help="the speed that silent frames should be played at. 999999 for jumpcutting.")
 parser.add_argument('-fm', '--frame_margin', type=float, default=1, help="some silent frames adjacent to sounded frames are included to provide context. How many frames on either the side of speech should be included? That's this variable.")
@@ -54,7 +55,19 @@ frameRate = args.frame_rate
 SAMPLE_RATE = args.sample_rate
 SILENT_THRESHOLD = args.silent_threshold
 FRAME_SPREADAGE = args.frame_margin
-NEW_SPEED = [args.silent_speed, args.sounded_speed]
+
+speed = args.speed.strip().split(':')
+if len(speed) != 2:
+	print('--speed argument must contain one and only one :')
+	exit()
+if not speed[0]:
+	speed[0] = '1'
+if not speed[1]:
+	speed[1] = '5'
+NEW_SPEED = [float(speed[1]),float(speed[0])]
+if NEW_SPEED[0] < 0 or NEW_SPEED[1] < 0:
+	print('--speed argument must not be negative')
+	exit()
 SILENCE_DURATION = args.silence_duration
 if args.url != None:
     INPUT_FILE = downloadFile(args.url)
