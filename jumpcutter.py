@@ -179,7 +179,6 @@ else:
 		f.close()
 
 		command = 'ffmpeg -v quiet -stats -i {in_file} -filter_complex_script "{script}" -map [v] -map [a] {out_file}'.format(in_file=INPUT_FILE, out_file=OUTPUT_FILE, script=tempTxt)
-		print(command)
 		print('Processing 1/1')
 		subprocess.call(command, shell=True)
 	else:
