@@ -39,6 +39,7 @@ parser.add_argument('-s', '--speed', type=str, default="1:5", help="[speed for s
 parser.add_argument('--sounded_speed', type=float, default=1.00, help="the speed that sounded (spoken) frames should be played at. Typically 1.")
 parser.add_argument('--silent_speed', type=float, default=5.00, help="the speed that silent frames should be played at. 999999 for jumpcutting.")
 parser.add_argument('-fm', '--frame_margin', type=float, default=1, help="some silent frames adjacent to sounded frames are included to provide context. How many frames on either the side of speech should be included? That's this variable.")
+parser.add_argument('-ss', '--section_size', type=float, default=150, help="To speed up processing of larger files the video is split into smaller sections. This is how many sounded or silent chunks are in each section. Larger sections may take longer to process while smaller sections are faster individually but have more overhead to split and recombine")
 parser.add_argument('-sr', '--sample_rate', type=float, default=44100, help="sample rate of the input and output videos")
 parser.add_argument('-fr', '--frame_rate', type=float, default=30, help="frame rate of the input and output videos. optional... I try to find it out myself, but it doesn't always work.")
 parser.add_argument('--simulate', action='store_true', help="does not render video but provides estimated output information")
@@ -46,7 +47,7 @@ parser.add_argument('--trim', action='store_true', help="removes the first and l
 
 args = parser.parse_args()
 
-
+SECTIONSIZE = args.section_size
 
 SIMULATE = args.simulate
 TRIM = args.trim
@@ -101,7 +102,8 @@ else:
 tempName = 'temp_{}'.format(''.join(random.choices(string.ascii_letters + string.digits, k=16)))
 os.mkdir(tempName)
 tempTxt = tempName+'/data.txt'
-command = 'ffmpeg -i "{input_file}" -ab {bitrate} -ac 2 -ar {samplerate} -vn {temp}/{temp}.wav'.format(input_file=INPUT_FILE, bitrate=BIT_RATE, samplerate=SAMPLE_RATE, temp=tempName)
+command = 'ffmpeg -v quiet -stats -i "{input_file}" -ab {bitrate} -ac 2 -ar {samplerate} -vn {temp}/{temp}.wav'.format(input_file=INPUT_FILE, bitrate=BIT_RATE, samplerate=SAMPLE_RATE, temp=tempName)
+print('Extracting Audio')
 subprocess.call(command, shell=True)
 
 
@@ -162,44 +164,63 @@ if SIMULATE:
 	print('Total output time= {h:d}:{m:02d}:{s:02d}'.format(h=int(t/3600), m=int(t/60)%60, s=int(t)%60))
 else:
 	fc = 0
-	i = 1 if (TRIM and chunks[0][2]==0) else 0
+	start = 1 if (TRIM and chunks[0][2]==0) else 0
 	end = len(chunks) - (1 if (TRIM and chunks[len(chunks)-1][2]==0) else 0)
 	
-	splits = []
-	j = i
-	while j < end:
-		j1 = min(j + 150, end-1)
-		splits.append([j,j1])
-		command = 'ffmpeg -ss {start}s -to {to}s -accurate_seek -i "{in_file}" {out_file}'.format(start=chunks[j][0]/frameRate, to=chunks[j1][1]/frameRate, in_file=INPUT_FILE, out_file='{name}/part{id}.mp4'.format(id=fc,name=tempName))
-		subprocess.call(command, shell=True)
-		j = j1 + 1
-		fc += 1
-	
-	fc = 0
-	for split in splits:
+	splitCount = int((end-start+SECTIONSIZE-2)/SECTIONSIZE)
+	if splitCount < 2:
 		cat = ''
-		start = chunks[split[0]][0]
 		f = open(tempTxt, 'w')
-		for i in range(split[0],split[1]+1):
-			f.write('[0:v] trim=start_frame={start}:end_frame={end},setpts=PTS-STARTPTS,setpts={arcspeed:.3f}*PTS [v{label}];[0:a] atrim=start_sample={astart}:end_sample={aend},asetpts=PTS-STARTPTS,atempo={speed:.3f} [a{label}];'.format(label=i, start = chunks[i][0]-start, end = chunks[i][1]-start, astart=int((chunks[i][0]-start)*SAMPLE_RATE/frameRate) , aend=int((chunks[i][1]-start)*SAMPLE_RATE/frameRate) , speed = NEW_SPEED[int(chunks[i][2])], arcspeed = 1/NEW_SPEED[int(chunks[i][2])]))
+		for i in range(start, end):
+			f.write('[0:v] trim=start_frame={start}:end_frame={end},setpts=PTS-STARTPTS,setpts={arcspeed:.3f}*PTS [v{label}];[0:a] atrim=start_sample={astart}:end_sample={aend},asetpts=PTS-STARTPTS,atempo={speed:.3f} [a{label}];'.format(label=i, start = chunks[i][0], end = chunks[i][1], astart=int((chunks[i][0])*SAMPLE_RATE/frameRate) , aend=int((chunks[i][1])*SAMPLE_RATE/frameRate) , speed = NEW_SPEED[int(chunks[i][2])], arcspeed = 1/NEW_SPEED[int(chunks[i][2])]))
 			cat += '[v{0}] [a{0}] '.format(i)
-		cat += 'concat=n={}:v=1:a=1 [v] [a]'.format(split[1]-split[0]+1)
-		f.write(' {}'.format(cat))
+		cat += 'concat=n={}:v=1:a=1 [v] [a]'.format(end-start)
+		f.write('{}'.format(cat))
 		f.close()
 
-		command = 'ffmpeg -i {in_file} -filter_complex_script "{script}" -map [v] -map [a] {out_file}'.format(in_file='{name}/part{id}.mp4'.format(id=fc,name=tempName), out_file='{name}/proc{id}.mp4'.format(id=fc,name=tempName), script=tempTxt)
+		command = 'ffmpeg -v quiet -stats -i {in_file} -filter_complex_script "{script}" -map [v] -map [a] {out_file}'.format(in_file=INPUT_FILE, out_file=OUTPUT_FILE, script=tempTxt)
+		print(command)
+		print('Processing 1/1')
 		subprocess.call(command, shell=True)
-		os.remove('{name}/part{id}.mp4'.format(id=fc,name=tempName))
-		fc += 1
-	
-	f = open(tempTxt, 'w')
-	for k in range(fc):
-		if k > 0:
-			f.write('\n')
-		f.write('file proc{id}.mp4'.format(id=k,name=tempName))
-	f.close()
-	subprocess.call('ffmpeg -f concat -safe 0 -i {input} -vcodec copy -acodec copy "{output}"'.format(output=OUTPUT_FILE, input=tempTxt), shell=True)
-	for k in range(fc):
-		os.remove('{name}/proc{id}.mp4'.format(id=k,name=tempName))
+	else:
+		splits = []
+		j = start
+		while j < end:
+			j1 = min(j + SECTIONSIZE, end-1)
+			splits.append([j,j1])
+			command = 'ffmpeg -v quiet -stats -ss {start}s -to {to}s -accurate_seek -i "{in_file}" {out_file}'.format(start=chunks[j][0]/frameRate, to=chunks[j1][1]/frameRate, in_file=INPUT_FILE, out_file='{name}/part{id}.mp4'.format(id=fc,name=tempName))
+			print('Splitting {}/{}'.format(fc+1,splitCount))
+			subprocess.call(command, shell=True)
+			j = j1 + 1
+			fc += 1
+		
+		fc = 0
+		for split in splits:
+			cat = ''
+			start = chunks[split[0]][0]
+			f = open(tempTxt, 'w')
+			for i in range(split[0],split[1]+1):
+				f.write('[0:v] trim=start_frame={start}:end_frame={end},setpts=PTS-STARTPTS,setpts={arcspeed:.3f}*PTS [v{label}];[0:a] atrim=start_sample={astart}:end_sample={aend},asetpts=PTS-STARTPTS,atempo={speed:.3f} [a{label}];'.format(label=i, start = chunks[i][0]-start, end = chunks[i][1]-start, astart=int((chunks[i][0]-start)*SAMPLE_RATE/frameRate) , aend=int((chunks[i][1]-start)*SAMPLE_RATE/frameRate) , speed = NEW_SPEED[int(chunks[i][2])], arcspeed = 1/NEW_SPEED[int(chunks[i][2])]))
+				cat += '[v{0}] [a{0}] '.format(i)
+			cat += 'concat=n={}:v=1:a=1 [v] [a]'.format(split[1]-split[0]+1)
+			f.write(' {}'.format(cat))
+			f.close()
+
+			command = 'ffmpeg -v quiet -stats -i {in_file} -filter_complex_script "{script}" -map [v] -map [a] {out_file}'.format(in_file='{name}/part{id}.mp4'.format(id=fc,name=tempName), out_file='{name}/proc{id}.mp4'.format(id=fc,name=tempName), script=tempTxt)
+			print('Processing {}/{}'.format(fc+1,len(splits)))
+			subprocess.call(command, shell=True)
+			os.remove('{name}/part{id}.mp4'.format(id=fc,name=tempName))
+			fc += 1
+		
+		f = open(tempTxt, 'w')
+		for k in range(fc):
+			if k > 0:
+				f.write('\n')
+			f.write('file proc{id}.mp4'.format(id=k,name=tempName))
+		f.close()
+		print('Recombining')
+		subprocess.call('ffmpeg -v quiet -stats -f concat -safe 0 -i {input} -vcodec copy -acodec copy "{output}"'.format(output=OUTPUT_FILE, input=tempTxt), shell=True)
+		for k in range(fc):
+			os.remove('{name}/proc{id}.mp4'.format(id=k,name=tempName))
 	os.remove(tempTxt)
 os.rmdir(tempName)
